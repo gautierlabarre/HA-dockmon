@@ -1,0 +1,26 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "DockMon",
+        "description": "Connect to your DockMon instance to monitor and control Docker containers.",
+        "data": {
+          "url": "DockMon URL",
+          "api_key": "API Key"
+        },
+        "data_description": {
+          "url": "URL of your DockMon instance (e.g. https://dockmon.media)",
+          "api_key": "API key with read+write permissions from DockMon Settings → API Keys"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Unable to connect to DockMon. Check the URL.",
+      "invalid_auth": "Invalid API key.",
+      "unknown": "Unexpected error."
+    },
+    "abort": {
+      "already_configured": "This DockMon instance is already configured."
+    }
+  }
+}

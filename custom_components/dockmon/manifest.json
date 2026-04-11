@@ -1,0 +1,13 @@
+{
+  "domain": "dockmon",
+  "name": "DockMon",
+  "version": "1.0.0",
+  "config_flow": true,
+  "documentation": "https://github.com/YOUR_GITHUB_USERNAME/ha-dockmon",
+  "issue_tracker": "https://github.com/YOUR_GITHUB_USERNAME/ha-dockmon/issues",
+  "requirements": [],
+  "dependencies": [],
+  "codeowners": ["@YOUR_GITHUB_USERNAME"],
+  "iot_class": "local_polling",
+  "homeassistant": "2024.1.0"
+}
