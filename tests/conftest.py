@@ -1,7 +1,12 @@
 """Fixtures shared by the DockMon tests."""
 import pytest
 
-from custom_components.dockmon.const import CONF_API_KEY, CONF_URL, DOMAIN
+from custom_components.dockmon.const import (
+    CONF_API_KEY,
+    CONF_URL,
+    CONF_VERIFY_SSL,
+    DOMAIN,
+)
 
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
@@ -61,8 +66,9 @@ def config_entry(hass) -> MockConfigEntry:
     """A config entry registered against hass."""
     entry = MockConfigEntry(
         domain=DOMAIN,
+        version=2,
         title="DockMon (mini-server)",
-        data={CONF_URL: URL, CONF_API_KEY: "s3cret"},
+        data={CONF_URL: URL, CONF_API_KEY: "s3cret", CONF_VERIFY_SSL: True},
         unique_id=f"dockmon_{URL}",
     )
     entry.add_to_hass(hass)

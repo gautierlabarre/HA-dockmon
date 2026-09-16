@@ -5,7 +5,9 @@ import logging
 from datetime import timedelta
 
 import aiohttp
+from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import ConfigEntryAuthFailed, HomeAssistantError
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
@@ -16,8 +18,11 @@ from .const import (
     API_CONTAINER_STOP,
     API_HOSTS,
     DEFAULT_SCAN_INTERVAL,
+    DEFAULT_VERIFY_SSL,
     DOMAIN,
 )
+
+AUTH_STATUSES = (401, 403)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -41,19 +46,29 @@ def container_key(container: dict) -> str:
 class DockmonCoordinator(DataUpdateCoordinator):
     """Fetch data from DockMon API."""
 
-    def __init__(self, hass: HomeAssistant, url: str, api_key: str) -> None:
+    def __init__(
+        self,
+        hass: HomeAssistant,
+        url: str,
+        api_key: str,
+        verify_ssl: bool = DEFAULT_VERIFY_SSL,
+        config_entry: ConfigEntry | None = None,
+    ) -> None:
         self.url = url.rstrip("/")
         self.api_key = api_key
+        self.verify_ssl = verify_ssl
         self._headers = {"Authorization": f"Bearer {api_key}"}
         super().__init__(
             hass,
             _LOGGER,
+            # Needed for ConfigEntryAuthFailed to start the reauth flow.
+            config_entry=config_entry,
             name=DOMAIN,
             update_interval=timedelta(seconds=DEFAULT_SCAN_INTERVAL),
         )
 
     def _session(self) -> aiohttp.ClientSession:
-        return async_get_clientsession(self.hass, verify_ssl=False)
+        return async_get_clientsession(self.hass, verify_ssl=self.verify_ssl)
 
     async def _async_update_data(self) -> dict:
         """Fetch hosts and containers."""
@@ -72,6 +87,11 @@ class DockmonCoordinator(DataUpdateCoordinator):
                 containers = await resp.json()
 
         except aiohttp.ClientResponseError as err:
+            if err.status in AUTH_STATUSES:
+                # Asks the user for a new API key instead of failing forever.
+                raise ConfigEntryAuthFailed(
+                    f"DockMon rejected the API key (HTTP {err.status})"
+                ) from err
             raise UpdateFailed(f"DockMon API error: {err.status} {err.message}") from err
         except aiohttp.ClientError as err:
             raise UpdateFailed(f"Cannot connect to DockMon at {self.url}: {err}") from err
@@ -113,7 +133,13 @@ class DockmonCoordinator(DataUpdateCoordinator):
             async with session.post(url, headers=self._headers, timeout=aiohttp.ClientTimeout(total=30)) as resp:
                 resp.raise_for_status()
         except aiohttp.ClientResponseError as err:
-            raise Exception(f"DockMon action '{action}' failed: {err.status} {err.message}") from err
+            raise HomeAssistantError(
+                f"DockMon action '{action}' failed: {err.status} {err.message}"
+            ) from err
+        except (aiohttp.ClientError, TimeoutError) as err:
+            raise HomeAssistantError(
+                f"DockMon action '{action}' could not reach {self.url}: {err}"
+            ) from err
 
     async def async_validate_connection(self) -> list[dict]:
         """Validate credentials and return hosts list."""

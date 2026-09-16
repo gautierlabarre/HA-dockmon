@@ -109,3 +109,39 @@ async def test_a_silent_host_does_not_lose_its_devices(hass, aioclient_mock, con
     await _setup(hass, config_entry)
 
     assert dev_reg.async_get_device_by_identifier((DOMAIN, "h1_nextcloud"), config_entry.entry_id) is not None
+
+
+async def test_v1_entries_keep_tls_verification_off(hass, mock_api):
+    """Turning verification on during a migration would break self-signed setups."""
+    from pytest_homeassistant_custom_component.common import MockConfigEntry
+
+    from custom_components.dockmon.const import (
+        CONF_API_KEY,
+        CONF_URL,
+        CONF_VERIFY_SSL,
+    )
+
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        version=1,
+        data={CONF_URL: URL, CONF_API_KEY: "s3cret"},
+        unique_id=f"dockmon_{URL}/",
+    )
+    entry.add_to_hass(hass)
+
+    await _setup(hass, entry)
+
+    assert entry.version == 2
+    assert entry.data[CONF_VERIFY_SSL] is False
+    assert hass.data[DOMAIN][entry.entry_id].verify_ssl is False
+    # The trailing slash is normalised away at the same time.
+    assert entry.unique_id == f"dockmon_{URL}"
+
+
+async def test_new_entries_verify_tls(hass, mock_api, config_entry):
+    """A v2 entry is left as-is: no migration, verification stays on."""
+    await _setup(hass, config_entry)
+
+    assert config_entry.version == 2
+
+    assert hass.data[DOMAIN][config_entry.entry_id].verify_ssl is True

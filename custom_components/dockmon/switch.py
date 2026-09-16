@@ -8,6 +8,7 @@ from typing import Any
 from homeassistant.components.switch import SwitchEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.event import async_call_later
 
@@ -73,7 +74,7 @@ class DockmonContainerSwitch(DockmonContainerEntity, SwitchEntity):
     async def _async_do(self, action: str) -> None:
         container_id = self._container_id
         if container_id is None:
-            raise RuntimeError(
+            raise HomeAssistantError(
                 f"Container '{self._container_name}' is no longer reported by DockMon"
             )
         await self.coordinator.async_container_action(self._host_id, container_id, action)

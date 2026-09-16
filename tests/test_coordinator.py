@@ -1,6 +1,7 @@
 """Tests for the DockMon coordinator."""
 import aiohttp
 import pytest
+from homeassistant.exceptions import ConfigEntryAuthFailed, HomeAssistantError
 from homeassistant.helpers.update_coordinator import UpdateFailed
 
 from custom_components.dockmon.coordinator import (
@@ -71,12 +72,22 @@ async def test_duplicate_names_keep_the_first_container(hass, aioclient_mock, ca
     assert "Duplicate DockMon container key" in caplog.text
 
 
-@pytest.mark.parametrize("status", [401, 403, 500])
+@pytest.mark.parametrize("status", [500, 502, 404])
 async def test_http_errors_surface_as_update_failed(hass, aioclient_mock, status):
     aioclient_mock.get(f"{URL}/api/hosts", status=status)
 
     coordinator = DockmonCoordinator(hass, url=URL, api_key="s3cret")
     with pytest.raises(UpdateFailed):
+        await coordinator._async_update_data()
+
+
+@pytest.mark.parametrize("status", [401, 403])
+async def test_a_rejected_api_key_asks_for_reauth(hass, aioclient_mock, status):
+    """ConfigEntryAuthFailed is what makes HA show the "reconfigure" prompt."""
+    aioclient_mock.get(f"{URL}/api/hosts", status=status)
+
+    coordinator = DockmonCoordinator(hass, url=URL, api_key="stale")
+    with pytest.raises(ConfigEntryAuthFailed):
         await coordinator._async_update_data()
 
 
@@ -107,6 +118,31 @@ async def test_container_action_posts_to_the_right_endpoint(hass, aioclient_mock
     await coordinator.async_container_action("h1", "c1", "restart")
 
     assert len(aioclient_mock.mock_calls) == 1
+
+
+async def test_a_failed_action_raises_a_home_assistant_error(hass, aioclient_mock):
+    """A bare Exception would surface in the UI as an unhandled traceback."""
+    aioclient_mock.post(f"{URL}/api/hosts/h1/containers/c1/start", status=409)
+
+    coordinator = DockmonCoordinator(hass, url=URL, api_key="s3cret")
+    with pytest.raises(HomeAssistantError, match="start"):
+        await coordinator.async_container_action("h1", "c1", "start")
+
+
+async def test_an_unreachable_action_raises_a_home_assistant_error(hass, aioclient_mock):
+    aioclient_mock.post(f"{URL}/api/hosts/h1/containers/c1/stop", exc=TimeoutError)
+
+    coordinator = DockmonCoordinator(hass, url=URL, api_key="s3cret")
+    with pytest.raises(HomeAssistantError):
+        await coordinator.async_container_action("h1", "c1", "stop")
+
+
+async def test_tls_verification_is_on_by_default(hass):
+    assert DockmonCoordinator(hass, url=URL, api_key="k").verify_ssl is True
+    assert (
+        DockmonCoordinator(hass, url=URL, api_key="k", verify_ssl=False).verify_ssl
+        is False
+    )
 
 
 async def test_unknown_action_is_rejected(hass):

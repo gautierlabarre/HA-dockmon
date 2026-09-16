@@ -21,6 +21,8 @@ A Home Assistant integration to monitor and control Docker containers via [DockM
 
 ## Installation via HACS
 
+**This is not yet done, I'll need to push my repository to HA, please follow the Manual installation in the meantime, and create an issue for this, to see if there is a real need**
+
 1. In HACS, click **Integrations** → **+ Explore & download repositories**
 2. Search for **DockMon** and click **Download**
 3. Restart Home Assistant
@@ -35,10 +37,18 @@ A Home Assistant integration to monitor and control Docker containers via [DockM
 
 ## Configuration
 
-| Field           | Description                                                            |
-| --------------- | ---------------------------------------------------------------------- |
-| **DockMon URL** | Base URL of your DockMon instance (e.g. `https://dockmon.example.com`) |
-| **API Key**     | API key with read + write permissions                                  |
+| Field                       | Description                                                                              |
+| --------------------------- | ---------------------------------------------------------------------------------------- |
+| **DockMon URL**             | Base URL of your DockMon instance (e.g. `https://dockmon.example.com`)                    |
+| **API Key**                 | API key with read + write permissions                                                     |
+| **Verify SSL certificate**  | On by default. Turn it off only for a self-signed certificate — it protects the API key. |
+
+If the API key is later revoked or rotated, Home Assistant raises a repair issue
+and asks for a new one; the entities and their history are kept.
+
+> Integrations set up before version 1.2.0 keep certificate verification **off**,
+> which is how they have always worked. To turn it on, remove and re-add the
+> integration.
 
 ## Entities
 

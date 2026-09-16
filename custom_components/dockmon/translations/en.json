@@ -6,21 +6,32 @@
         "description": "Connect to your DockMon instance to monitor and control Docker containers.",
         "data": {
           "url": "DockMon URL",
-          "api_key": "API Key"
+          "api_key": "API Key",
+          "verify_ssl": "Verify SSL certificate"
         },
         "data_description": {
-          "url": "URL of your DockMon instance (e.g. https://dockmon.url)",
-          "api_key": "API key with read+write permissions from DockMon Settings → API Keys"
+          "url": "URL of your DockMon instance (e.g. https://dockmon.example.com)",
+          "api_key": "API key with read+write permissions from DockMon Settings → API Keys",
+          "verify_ssl": "Turn this off only if DockMon uses a self-signed certificate. Leaving it on protects the API key in transit."
+        }
+      },
+      "reauth_confirm": {
+        "title": "Reauthenticate DockMon",
+        "description": "The API key for {url} was rejected. Enter a new one from DockMon Settings → API Keys.",
+        "data": {
+          "api_key": "API Key"
         }
       }
     },
     "error": {
       "cannot_connect": "Unable to connect to DockMon. Check the URL.",
       "invalid_auth": "Invalid API key.",
+      "invalid_certificate": "The SSL certificate could not be verified. Turn off certificate verification if DockMon uses a self-signed certificate.",
       "unknown": "Unexpected error."
     },
     "abort": {
-      "already_configured": "This DockMon instance is already configured."
+      "already_configured": "This DockMon instance is already configured.",
+      "reauth_successful": "DockMon was successfully re-authenticated."
     }
   }
 }

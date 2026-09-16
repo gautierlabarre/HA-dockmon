@@ -7,7 +7,15 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import device_registry as dr, entity_registry as er
 
-from .const import CONF_API_KEY, CONF_URL, DOMAIN, PLATFORMS
+from .config_flow import unique_id_for
+from .const import (
+    CONF_API_KEY,
+    CONF_URL,
+    CONF_VERIFY_SSL,
+    DEFAULT_VERIFY_SSL,
+    DOMAIN,
+    PLATFORMS,
+)
 from .coordinator import DockmonCoordinator, container_key
 
 _LOGGER = logging.getLogger(__name__)
@@ -107,12 +115,35 @@ def _prune_stale_devices(
         dev_reg.async_remove_device(device.id)
 
 
+async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    """Migrate an entry created by an older version of the integration."""
+    if entry.version > 2:
+        return False  # downgrade: let HA report the entry as unusable
+
+    if entry.version == 1:
+        # v1 always talked to DockMon with TLS verification off. Keep it that way
+        # for existing entries — turning it on here would break every self-signed
+        # setup on upgrade. New entries verify by default; this can be flipped by
+        # removing and re-adding the integration.
+        hass.config_entries.async_update_entry(
+            entry,
+            data={**entry.data, CONF_VERIFY_SSL: False},
+            unique_id=unique_id_for(entry.data[CONF_URL]),
+            version=2,
+        )
+        _LOGGER.info("Migrated DockMon config entry %s to version 2", entry.title)
+
+    return True
+
+
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up DockMon from a config entry."""
     coordinator = DockmonCoordinator(
         hass,
         url=entry.data[CONF_URL],
         api_key=entry.data[CONF_API_KEY],
+        verify_ssl=entry.data.get(CONF_VERIFY_SSL, DEFAULT_VERIFY_SSL),
+        config_entry=entry,
     )
     await coordinator.async_config_entry_first_refresh()
 
