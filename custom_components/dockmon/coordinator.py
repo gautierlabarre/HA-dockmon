@@ -22,6 +22,22 @@ from .const import (
 _LOGGER = logging.getLogger(__name__)
 
 
+def container_name(container: dict) -> str:
+    """Return the container name, falling back to its Docker ID."""
+    return (container.get("name") or "").strip().lstrip("/") or container["id"]
+
+
+def container_key(container: dict) -> str:
+    """Stable identity for a container.
+
+    Keyed on the container *name* rather than its Docker ID: the ID changes every
+    time the container is recreated (image update, `docker compose up -d`, ...),
+    which would otherwise spawn a brand new HA device on each recreation. Names
+    are unique per host in Docker, so `host_id + name` is both stable and unique.
+    """
+    return f"{container['host_id']}_{container_name(container)}"
+
+
 class DockmonCoordinator(DataUpdateCoordinator):
     """Fetch data from DockMon API."""
 
@@ -61,7 +77,24 @@ class DockmonCoordinator(DataUpdateCoordinator):
             raise UpdateFailed(f"Cannot connect to DockMon at {self.url}: {err}") from err
 
         hosts_by_id = {h["id"]: h for h in hosts}
-        return {"hosts": hosts_by_id, "containers": containers}
+        containers_by_key: dict[str, dict] = {}
+        for container in containers:
+            key = container_key(container)
+            if key in containers_by_key:
+                _LOGGER.warning(
+                    "Duplicate DockMon container key %s (ids %s and %s), ignoring the second one",
+                    key,
+                    containers_by_key[key]["id"],
+                    container["id"],
+                )
+                continue
+            containers_by_key[key] = container
+
+        return {
+            "hosts": hosts_by_id,
+            "containers": containers,
+            "containers_by_key": containers_by_key,
+        }
 
     async def async_container_action(self, host_id: str, container_id: str, action: str) -> None:
         """Perform a container action: start, stop, restart."""

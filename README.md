@@ -1,8 +1,8 @@
 # DockMon for Home Assistant
 
-[![hacs_badge](https://img.shields.io/badge/HACS-Default-41BDF5.svg)](https://github.com/hacs/integration)
+[![hacs_badge](https://img.shields.io/badge/HACS-Custom-41BDF5.svg)](https://github.com/hacs/integration)
 
-A Home Assistant integration to monitor and control Docker containers via [DockMon](https://github.com/YOUR_GITHUB_USERNAME/dockmon).
+A Home Assistant integration to monitor and control Docker containers via [DockMon](https://github.com/darthnorse/dockmon).
 
 ## Features
 
@@ -10,11 +10,13 @@ A Home Assistant integration to monitor and control Docker containers via [DockM
 - **Binary sensor** – Running state of each container
 - **Sensors** – CPU %, Memory %, Memory usage (MB), container state
 - Automatic discovery of all hosts and containers
+- Devices survive container recreation (identified by host + container name, not by the Docker ID)
+- Devices of removed containers/hosts are cleaned up automatically
 - Supports multiple DockMon instances
 
 ## Requirements
 
-- A running [DockMon](https://github.com/YOUR_GITHUB_USERNAME/dockmon) instance
+- A running [DockMon](https://github.com/darthnorse/dockmon) instance
 - An API key (DockMon Settings → API Keys)
 
 ## Installation via HACS
@@ -53,4 +55,12 @@ For each Docker container, the integration creates a **device** with the followi
 
 ## Contributing
 
-Issues and pull requests are welcome on [GitHub](https://github.com/YOUR_GITHUB_USERNAME/ha-dockmon).
+Issues and pull requests are welcome on [GitHub](https://github.com/gautierlabarre/HA-dockmon/issues).
+
+## License
+
+Released under the [MIT License](LICENSE).
+
+This project is an independent Home Assistant integration and is not affiliated
+with, endorsed by, or maintained by the [DockMon](https://github.com/darthnorse/dockmon)
+project.

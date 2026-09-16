@@ -1,71 +1,54 @@
 """Binary sensor platform for DockMon – container running state."""
 from __future__ import annotations
 
+from functools import partial
+
 from homeassistant.components.binary_sensor import (
     BinarySensorDeviceClass,
     BinarySensorEntity,
 )
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
-from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
-from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import CONTAINER_STATE_RUNNING, DOMAIN
 from .coordinator import DockmonCoordinator
+from .entity import DockmonContainerEntity
 
 
 async def async_setup_entry(
     hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback
 ) -> None:
     coordinator: DockmonCoordinator = hass.data[DOMAIN][entry.entry_id]
-    known_ids: set[str] = set()
+    known_keys: set[str] = set()
 
     @callback
     def _add_new_entities() -> None:
-        new = [c for c in coordinator.data["containers"] if c["id"] not in known_ids]
-        if new:
-            known_ids.update(c["id"] for c in new)
-            async_add_entities([DockmonContainerBinarySensor(coordinator, c) for c in new])
+        new = [
+            DockmonContainerBinarySensor(coordinator, c)
+            for key, c in coordinator.data["containers_by_key"].items()
+            if key not in known_keys
+        ]
+        if not new:
+            return
+        known_keys.update(e.key for e in new)
+        for entity in new:
+            entity.async_on_remove(partial(known_keys.discard, entity.key))
+        async_add_entities(new)
 
     _add_new_entities()
     entry.async_on_unload(coordinator.async_add_listener(_add_new_entities))
 
 
-class DockmonContainerBinarySensor(CoordinatorEntity, BinarySensorEntity):
+class DockmonContainerBinarySensor(DockmonContainerEntity, BinarySensorEntity):
     """Binary sensor: True when container is running."""
 
-    _attr_has_entity_name = True
     _attr_name = "Running"
     _attr_device_class = BinarySensorDeviceClass.RUNNING
 
     def __init__(self, coordinator: DockmonCoordinator, container: dict) -> None:
-        super().__init__(coordinator)
-        self._container_id = container["id"]
-        self._host_id = container["host_id"]
-        self._attr_unique_id = f"{DOMAIN}_{self._host_id}_{self._container_id}_running"
-
-    @property
-    def _container(self) -> dict | None:
-        for c in self.coordinator.data["containers"]:
-            if c["id"] == self._container_id:
-                return c
-        return None
-
-    @property
-    def device_info(self) -> DeviceInfo:
-        c = self._container or {}
-        host = self.coordinator.data["hosts"].get(self._host_id, {})
-        host_name = host.get("name", "unknown")
-        container_name = c.get("name", self._container_id)
-        return DeviceInfo(
-            identifiers={(DOMAIN, f"{self._host_id}_{self._container_id}")},
-            name=f"{host_name} {container_name}",
-        )
-
-    @property
-    def available(self) -> bool:
-        return self._container is not None
+        super().__init__(coordinator, container)
+        self._attr_unique_id = f"{DOMAIN}_{self.key}_running"
 
     @property
     def is_on(self) -> bool:

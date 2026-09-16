@@ -9,7 +9,7 @@
           "api_key": "API Key"
         },
         "data_description": {
-          "url": "URL of your DockMon instance (e.g. https://dockmon.media)",
+          "url": "URL of your DockMon instance (e.g. https://dockmon.url)",
           "api_key": "API key with read+write permissions from DockMon Settings → API Keys"
         }
       }

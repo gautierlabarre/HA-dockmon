@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import partial
 from typing import Callable
 
 from homeassistant.components.sensor import (
@@ -19,6 +20,7 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN
 from .coordinator import DockmonCoordinator
+from .entity import DockmonContainerEntity
 
 
 @dataclass
@@ -65,34 +67,31 @@ async def async_setup_entry(
     hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback
 ) -> None:
     coordinator: DockmonCoordinator = hass.data[DOMAIN][entry.entry_id]
-    known_container_ids: set[str] = set()
+    known_container_keys: set[str] = set()
     known_host_ids: set[str] = set()
 
     @callback
     def _add_new_entities() -> None:
         entities: list = []
 
-        new_hosts = [
-            (hid, h)
-            for hid, h in coordinator.data["hosts"].items()
-            if hid not in known_host_ids
-        ]
-        if new_hosts:
-            known_host_ids.update(hid for hid, _ in new_hosts)
-            entities.extend(
-                DockmonHostSensor(coordinator, hid) for hid, _ in new_hosts
-            )
+        for host_id in coordinator.data["hosts"]:
+            if host_id in known_host_ids:
+                continue
+            known_host_ids.add(host_id)
+            sensor = DockmonHostSensor(coordinator, host_id)
+            sensor.async_on_remove(partial(known_host_ids.discard, host_id))
+            entities.append(sensor)
 
-        new_containers = [
-            c for c in coordinator.data["containers"] if c["id"] not in known_container_ids
-        ]
-        if new_containers:
-            known_container_ids.update(c["id"] for c in new_containers)
-            entities.extend(
-                DockmonContainerSensor(coordinator, c, desc)
-                for c in new_containers
-                for desc in CONTAINER_SENSORS
-            )
+        for key, container in coordinator.data["containers_by_key"].items():
+            if key in known_container_keys:
+                continue
+            known_container_keys.add(key)
+            for desc in CONTAINER_SENSORS:
+                sensor = DockmonContainerSensor(coordinator, container, desc)
+                entities.append(sensor)
+            # One discard is enough: all four sensors share the same key and are
+            # added and removed together.
+            entities[-1].async_on_remove(partial(known_container_keys.discard, key))
 
         if entities:
             async_add_entities(entities)
@@ -101,7 +100,7 @@ async def async_setup_entry(
     entry.async_on_unload(coordinator.async_add_listener(_add_new_entities))
 
 
-class DockmonHostSensor(CoordinatorEntity, SensorEntity):
+class DockmonHostSensor(CoordinatorEntity[DockmonCoordinator], SensorEntity):
     """Sensor showing the number of running containers on a host."""
 
     _attr_has_entity_name = True
@@ -123,6 +122,10 @@ class DockmonHostSensor(CoordinatorEntity, SensorEntity):
         )
 
     @property
+    def available(self) -> bool:
+        return super().available and self._host_id in self.coordinator.data["hosts"]
+
+    @property
     def native_value(self) -> int:
         return sum(
             1
@@ -131,11 +134,10 @@ class DockmonHostSensor(CoordinatorEntity, SensorEntity):
         )
 
 
-class DockmonContainerSensor(CoordinatorEntity, SensorEntity):
+class DockmonContainerSensor(DockmonContainerEntity, SensorEntity):
     """A sensor for a container metric."""
 
     entity_description: DockmonSensorEntityDescription
-    _attr_has_entity_name = True
 
     def __init__(
         self,
@@ -143,33 +145,9 @@ class DockmonContainerSensor(CoordinatorEntity, SensorEntity):
         container: dict,
         description: DockmonSensorEntityDescription,
     ) -> None:
-        super().__init__(coordinator)
+        super().__init__(coordinator, container)
         self.entity_description = description
-        self._container_id = container["id"]
-        self._host_id = container["host_id"]
-        self._attr_unique_id = f"{DOMAIN}_{self._host_id}_{self._container_id}_{description.key}"
-
-    @property
-    def _container(self) -> dict | None:
-        for c in self.coordinator.data["containers"]:
-            if c["id"] == self._container_id:
-                return c
-        return None
-
-    @property
-    def device_info(self) -> DeviceInfo:
-        c = self._container or {}
-        host = self.coordinator.data["hosts"].get(self._host_id, {})
-        host_name = host.get("name", "unknown")
-        container_name = c.get("name", self._container_id)
-        return DeviceInfo(
-            identifiers={(DOMAIN, f"{self._host_id}_{self._container_id}")},
-            name=f"{host_name} {container_name}",
-        )
-
-    @property
-    def available(self) -> bool:
-        return self._container is not None
+        self._attr_unique_id = f"{DOMAIN}_{self.key}_{description.key}"
 
     @property
     def native_value(self) -> float | str | None:
