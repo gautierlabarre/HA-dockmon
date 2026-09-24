@@ -4,10 +4,12 @@ import pytest
 from homeassistant.exceptions import ConfigEntryAuthFailed, HomeAssistantError
 from homeassistant.helpers.update_coordinator import UpdateFailed
 
+from custom_components.dockmon.const import DEFAULT_SCAN_INTERVAL, POLL_TIMEOUT
 from custom_components.dockmon.coordinator import (
     DockmonCoordinator,
     container_key,
     container_name,
+    host_is_online,
 )
 
 from .conftest import CONTAINERS, HOSTS, URL
@@ -194,3 +196,31 @@ def test_same_service_on_two_hosts_stays_distinct():
     a = {"id": "c1", "host_id": "h1", "name": "caddy", "labels": COMPOSE}
     b = {"id": "c2", "host_id": "h2", "name": "caddy", "labels": COMPOSE}
     assert container_key(a) != container_key(b)
+
+
+# --- Host reachability ------------------------------------------------------
+# An offline host is still listed by /api/hosts, but its containers are omitted
+# from /api/containers, so its inventory must not be read as "empty".
+
+
+def test_host_online():
+    assert host_is_online({"id": "h1", "status": "online"}) is True
+
+
+def test_host_offline():
+    assert host_is_online({"id": "h1", "status": "offline"}) is False
+
+
+def test_host_without_status_is_assumed_reachable():
+    """Older DockMon builds report no status; don't mark every host offline."""
+    assert host_is_online({"id": "h1"}) is True
+
+
+def test_missing_host_is_not_online():
+    assert host_is_online(None) is False
+    assert host_is_online({}) is False
+
+
+def test_two_polls_fit_inside_one_scan_interval():
+    """A slow update must not overlap the next one."""
+    assert 2 * POLL_TIMEOUT <= DEFAULT_SCAN_INTERVAL

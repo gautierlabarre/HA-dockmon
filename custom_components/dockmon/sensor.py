@@ -19,7 +19,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN
-from .coordinator import DockmonCoordinator
+from .coordinator import DockmonCoordinator, host_is_online
 from .entity import DockmonContainerEntity
 
 
@@ -114,8 +114,12 @@ class DockmonHostSensor(CoordinatorEntity[DockmonCoordinator], SensorEntity):
         self._attr_unique_id = f"{DOMAIN}_{host_id}_running_containers"
 
     @property
+    def _host(self) -> dict | None:
+        return self.coordinator.data["hosts"].get(self._host_id)
+
+    @property
     def device_info(self) -> DeviceInfo:
-        host = self.coordinator.data["hosts"].get(self._host_id, {})
+        host = self._host or {}
         return DeviceInfo(
             identifiers={(DOMAIN, self._host_id)},
             name=host.get("name", self._host_id),
@@ -123,7 +127,9 @@ class DockmonHostSensor(CoordinatorEntity[DockmonCoordinator], SensorEntity):
 
     @property
     def available(self) -> bool:
-        return super().available and self._host_id in self.coordinator.data["hosts"]
+        # An offline host has its containers omitted from the API, so counting
+        # them would report a confident 0 instead of "we cannot know".
+        return super().available and host_is_online(self._host)
 
     @property
     def native_value(self) -> int:

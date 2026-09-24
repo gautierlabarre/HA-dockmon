@@ -13,6 +13,7 @@ from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .const import (
+    ACTION_TIMEOUT,
     API_CONTAINERS,
     API_CONTAINER_RESTART,
     API_CONTAINER_START,
@@ -21,6 +22,7 @@ from .const import (
     DEFAULT_SCAN_INTERVAL,
     DEFAULT_VERIFY_SSL,
     DOMAIN,
+    POLL_TIMEOUT,
 )
 
 AUTH_STATUSES = (401, 403)
@@ -33,6 +35,23 @@ _LOGGER = logging.getLogger(__name__)
 # was current when the collision was resolved, so it neither matches the running
 # container nor stays put — it must never reach a name or a key.
 _SHORT_ID_PREFIX_RE = re.compile(r"^[0-9a-f]{12}_")
+
+HOST_STATUS_ONLINE = "online"
+
+
+def host_is_online(host: dict | None) -> bool:
+    """Whether DockMon can currently reach this host.
+
+    An offline host still appears in /api/hosts, but its containers are omitted
+    from /api/containers — so its inventory must never be read as "it has none".
+    A host that reports no status at all comes from an older DockMon: assume it
+    is reachable rather than marking every host offline.
+    """
+    if not host:
+        return False
+    status = host.get("status")
+    return status is None or status == HOST_STATUS_ONLINE
+
 
 COMPOSE_PROJECT_LABEL = "com.docker.compose.project"
 COMPOSE_SERVICE_LABEL = "com.docker.compose.service"
@@ -110,13 +129,13 @@ class DockmonCoordinator(DataUpdateCoordinator):
         session = self._session()
         try:
             async with session.get(
-                f"{self.url}{API_HOSTS}", headers=self._headers, timeout=aiohttp.ClientTimeout(total=10)
+                f"{self.url}{API_HOSTS}", headers=self._headers, timeout=aiohttp.ClientTimeout(total=POLL_TIMEOUT)
             ) as resp:
                 resp.raise_for_status()
                 hosts = await resp.json()
 
             async with session.get(
-                f"{self.url}{API_CONTAINERS}", headers=self._headers, timeout=aiohttp.ClientTimeout(total=10)
+                f"{self.url}{API_CONTAINERS}", headers=self._headers, timeout=aiohttp.ClientTimeout(total=POLL_TIMEOUT)
             ) as resp:
                 resp.raise_for_status()
                 containers = await resp.json()
@@ -165,7 +184,7 @@ class DockmonCoordinator(DataUpdateCoordinator):
         url = self.url + path.format(host_id=host_id, container_id=container_id)
         session = self._session()
         try:
-            async with session.post(url, headers=self._headers, timeout=aiohttp.ClientTimeout(total=30)) as resp:
+            async with session.post(url, headers=self._headers, timeout=aiohttp.ClientTimeout(total=ACTION_TIMEOUT)) as resp:
                 resp.raise_for_status()
         except aiohttp.ClientResponseError as err:
             raise HomeAssistantError(
@@ -180,7 +199,7 @@ class DockmonCoordinator(DataUpdateCoordinator):
         """Validate credentials and return hosts list."""
         session = self._session()
         async with session.get(
-            f"{self.url}{API_HOSTS}", headers=self._headers, timeout=aiohttp.ClientTimeout(total=10)
+            f"{self.url}{API_HOSTS}", headers=self._headers, timeout=aiohttp.ClientTimeout(total=POLL_TIMEOUT)
         ) as resp:
             resp.raise_for_status()
             return await resp.json()

@@ -37,3 +37,34 @@ async def test_the_host_sensor_counts_running_containers(hass, mock_api, config_
 
     # One of the two fixture containers is running.
     assert _state(hass, "dockmon_h1_running_containers").state == "1"
+
+
+async def test_the_host_sensor_is_unavailable_when_the_host_is_offline(
+    hass, aioclient_mock, config_entry
+):
+    """DockMon omits an offline host's containers, so counting them would
+    report a confident 0 where the truthful answer is "unknown"."""
+    from .conftest import CONTAINERS, HOSTS, URL
+
+    offline = [{**HOSTS[0], "status": "offline"}]
+    aioclient_mock.get(f"{URL}/api/hosts", json=offline)
+    # Exactly what DockMon does for an offline host: the host is still listed,
+    # its containers are not.
+    aioclient_mock.get(f"{URL}/api/containers", json=[])
+
+    await _setup(hass, config_entry)
+
+    assert _state(hass, "dockmon_h1_running_containers").state == "unavailable"
+
+
+async def test_the_host_sensor_counts_again_once_the_host_is_online(
+    hass, aioclient_mock, config_entry
+):
+    from .conftest import CONTAINERS, HOSTS, URL
+
+    aioclient_mock.get(f"{URL}/api/hosts", json=[{**HOSTS[0], "status": "online"}])
+    aioclient_mock.get(f"{URL}/api/containers", json=CONTAINERS)
+
+    await _setup(hass, config_entry)
+
+    assert _state(hass, "dockmon_h1_running_containers").state == "1"
