@@ -129,21 +129,47 @@ async def test_an_empty_payload_never_prunes(hass, aioclient_mock, config_entry,
     assert dev_reg.async_get_device_by_identifier((DOMAIN, "h1_nextcloud"), config_entry.entry_id) is not None
 
 
-async def test_a_silent_host_does_not_lose_its_devices(hass, aioclient_mock, config_entry):
-    """A host reporting zero containers is probably unreachable, not empty."""
-    aioclient_mock.get(f"{URL}/api/hosts", json=HOSTS)
+async def test_an_offline_host_keeps_its_devices(hass, aioclient_mock, config_entry, monkeypatch):
+    """DockMon omits an offline host's containers, so its inventory proves nothing."""
+    monkeypatch.setattr(dockmon, "STALE_GRACE", 0)
+    aioclient_mock.get(f"{URL}/api/hosts", json=[{**HOSTS[0], "status": "offline"}])
     aioclient_mock.get(f"{URL}/api/containers", json=[])
-
-    dev_reg = dr.async_get(hass)
-    dev_reg.async_get_or_create(
-        config_entry_id=config_entry.entry_id,
-        identifiers={(DOMAIN, "h1_nextcloud")},
-        name="mini-server nextcloud",
-    )
+    _stale_device(hass, config_entry, "h1_nextcloud")
 
     await _setup(hass, config_entry)
 
+    dev_reg = dr.async_get(hass)
     assert dev_reg.async_get_device_by_identifier((DOMAIN, "h1_nextcloud"), config_entry.entry_id) is not None
+
+
+async def test_an_online_host_with_no_containers_loses_them(
+    hass, aioclient_mock, config_entry, monkeypatch
+):
+    """An online host really reporting nothing means the last container is gone."""
+    monkeypatch.setattr(dockmon, "STALE_GRACE", 0)
+    aioclient_mock.get(f"{URL}/api/hosts", json=[{**HOSTS[0], "status": "online"}])
+    aioclient_mock.get(f"{URL}/api/containers", json=[])
+    _stale_device(hass, config_entry, "h1_nextcloud")
+
+    await _setup(hass, config_entry)
+
+    dev_reg = dr.async_get(hass)
+    assert dev_reg.async_get_device_by_identifier((DOMAIN, "h1_nextcloud"), config_entry.entry_id) is None
+
+
+async def test_devices_of_a_deleted_host_are_pruned(
+    hass, mock_api, config_entry, monkeypatch
+):
+    """A host gone from /api/hosts was removed in DockMon, not merely unreachable."""
+    monkeypatch.setattr(dockmon, "STALE_GRACE", 0)
+    _stale_device(hass, config_entry, "gone-host")
+    _stale_device(hass, config_entry, "gone-host_something")
+
+    await _setup(hass, config_entry)
+
+    dev_reg = dr.async_get(hass)
+    for ident in ("gone-host", "gone-host_something"):
+        assert dev_reg.async_get_device_by_identifier((DOMAIN, ident), config_entry.entry_id) is None
 
 
 async def test_v1_entries_keep_tls_verification_off(hass, mock_api):

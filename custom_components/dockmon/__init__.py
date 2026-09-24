@@ -17,7 +17,12 @@ from .const import (
     DOMAIN,
     PLATFORMS,
 )
-from .coordinator import DockmonCoordinator, container_key, legacy_container_keys
+from .coordinator import (
+    DockmonCoordinator,
+    container_key,
+    host_is_online,
+    legacy_container_keys,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -104,35 +109,37 @@ def _prune_stale_devices(
 
     Removing a device deletes its entities from the registry, which frees their
     entity IDs and breaks every dashboard card and automation pointing at them —
-    so absence is only ever acted on once it has held for STALE_GRACE.
+    so absence is only ever acted on when the host reporting it is online, and
+    only once it has held for STALE_GRACE. The grace period also covers a
+    container DockMon skipped because it failed to parse it: its siblings are
+    still returned, so a single bad poll would otherwise look like a deletion.
     """
     if not coordinator.last_update_success:
         return
 
     data = coordinator.data
-    hosts, containers = data["hosts"], data["containers"]
-    # An empty payload is indistinguishable from a DockMon that is still starting
-    # up: it answers 200 with [] before its Docker hosts have connected. Treating
-    # that as "everything was deleted" would wipe the whole integration in one poll.
-    if not hosts or not containers:
+    hosts = data["hosts"]
+    # No hosts at all is indistinguishable from a DockMon that is still starting
+    # up: it answers 200 with [] before anything has connected. Treating that as
+    # "everything was deleted" would wipe the whole integration in one poll.
+    if not hosts:
         missing_since.clear()
         return
 
-    host_ids = set(hosts)
-    container_keys = set(data["containers_by_key"])
-    live = host_ids | container_keys
-    # A host reporting zero containers is far more likely unreachable than truly
-    # empty, so leave its devices alone rather than wiping them on a bad poll.
-    hosts_with_containers = {c["host_id"] for c in containers}
-
+    live = set(hosts) | set(data["containers_by_key"])
     now = time.monotonic()
     dev_reg = dr.async_get(hass)
     for device in dr.async_entries_for_config_entry(dev_reg, entry.entry_id):
         ids = {i for d, i in device.identifiers if d == DOMAIN}
         owner = next(
-            (h for h in host_ids if any(i.startswith(f"{h}_") for i in ids)), None
+            (h for h in hosts if any(i.startswith(f"{h}_") for i in ids)), None
         )
-        if (ids & live) or (owner is not None and owner not in hosts_with_containers):
+        # An offline host has its containers omitted from /api/containers, so its
+        # inventory says nothing about what still exists there. A device whose
+        # host has disappeared from /api/hosts altogether is a different story:
+        # the host was deleted in DockMon, and it can go.
+        inventory_is_trustworthy = owner is None or host_is_online(hosts[owner])
+        if (ids & live) or not inventory_is_trustworthy:
             missing_since.pop(device.id, None)
             continue
 
