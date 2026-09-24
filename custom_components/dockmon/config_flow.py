@@ -18,7 +18,7 @@ from .const import (
     DEFAULT_VERIFY_SSL,
     DOMAIN,
 )
-from .coordinator import AUTH_STATUSES, DockmonCoordinator
+from .coordinator import FORBIDDEN, UNAUTHORIZED, DockmonCoordinator
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -61,8 +61,12 @@ async def async_validate(
         return await coordinator.async_validate_connection(), {}
     except aiohttp.ClientResponseError as err:
         _LOGGER.debug("DockMon /api/hosts returned HTTP %s", err.status)
-        if err.status in AUTH_STATUSES:
+        if err.status == UNAUTHORIZED:
             return [], {"base": "invalid_auth"}
+        if err.status == FORBIDDEN:
+            # Telling the user the key is wrong would send them hunting for the
+            # wrong problem: it is valid, just not allowed to do this.
+            return [], {"base": "insufficient_permissions"}
         return [], {"base": "cannot_connect"}
     except aiohttp.ClientSSLError as err:
         _LOGGER.error("DockMon TLS error: %s", err)

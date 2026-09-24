@@ -25,6 +25,7 @@
     },
     "error": {
       "cannot_connect": "Unable to connect to DockMon. Check the address.",
+      "insufficient_permissions": "The API key is valid but its group lacks the required permissions. It needs hosts.view, containers.view and containers.operate, which you can grant in DockMon Settings → API Keys.",
       "invalid_auth": "Invalid API key.",
       "invalid_certificate": "The SSL certificate could not be verified. Turn off certificate verification if DockMon uses a self-signed certificate.",
       "unknown": "Unexpected error."

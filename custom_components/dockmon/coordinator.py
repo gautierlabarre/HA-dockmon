@@ -25,7 +25,14 @@ from .const import (
     POLL_TIMEOUT,
 )
 
-AUTH_STATUSES = (401, 403)
+# DockMon separates the two: 401 means the key is invalid or revoked, 403 means
+# the key is valid but its group lacks a capability. Only the first is worth
+# asking the user for a new key — a 403 answer would be the same key again.
+UNAUTHORIZED = 401
+FORBIDDEN = 403
+
+# What the integration needs to poll and to drive the switches.
+REQUIRED_CAPABILITIES = ("hosts.view", "containers.view", "containers.operate")
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -141,10 +148,17 @@ class DockmonCoordinator(DataUpdateCoordinator):
                 containers = await resp.json()
 
         except aiohttp.ClientResponseError as err:
-            if err.status in AUTH_STATUSES:
+            if err.status == UNAUTHORIZED:
                 # Asks the user for a new API key instead of failing forever.
                 raise ConfigEntryAuthFailed(
-                    f"DockMon rejected the API key (HTTP {err.status})"
+                    "DockMon rejected the API key (HTTP 401)"
+                ) from err
+            if err.status == FORBIDDEN:
+                # The key is fine; re-prompting for it would only get it back.
+                raise UpdateFailed(
+                    "DockMon refused the request (HTTP 403). The API key is valid "
+                    "but its group is missing one of: "
+                    f"{', '.join(REQUIRED_CAPABILITIES)}."
                 ) from err
             raise UpdateFailed(f"DockMon API error: {err.status} {err.message}") from err
         except aiohttp.ClientError as err:

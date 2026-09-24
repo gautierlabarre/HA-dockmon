@@ -83,13 +83,25 @@ async def test_http_errors_surface_as_update_failed(hass, aioclient_mock, status
         await coordinator._async_update_data()
 
 
-@pytest.mark.parametrize("status", [401, 403])
-async def test_a_rejected_api_key_asks_for_reauth(hass, aioclient_mock, status):
+async def test_a_rejected_api_key_asks_for_reauth(hass, aioclient_mock):
     """ConfigEntryAuthFailed is what makes HA show the "reconfigure" prompt."""
-    aioclient_mock.get(f"{URL}/api/hosts", status=status)
+    aioclient_mock.get(f"{URL}/api/hosts", status=401)
 
     coordinator = DockmonCoordinator(hass, url=URL, api_key="stale")
     with pytest.raises(ConfigEntryAuthFailed):
+        await coordinator._async_update_data()
+
+
+async def test_an_underscoped_api_key_does_not_ask_for_reauth(hass, aioclient_mock):
+    """403 means the key is valid but missing a capability.
+
+    Prompting for a new key would loop: the user re-enters the same, correct key
+    and is told again that it is invalid.
+    """
+    aioclient_mock.get(f"{URL}/api/hosts", status=403)
+
+    coordinator = DockmonCoordinator(hass, url=URL, api_key="valid-but-readonly")
+    with pytest.raises(UpdateFailed, match="containers.operate"):
         await coordinator._async_update_data()
 
 

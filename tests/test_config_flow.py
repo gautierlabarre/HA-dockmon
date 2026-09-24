@@ -61,7 +61,8 @@ async def test_successful_setup_creates_the_entry(hass, mock_api):
     ("status", "expected_error"),
     [
         (401, "invalid_auth"),
-        (403, "invalid_auth"),
+        # Not invalid_auth: the key is valid, it just lacks a capability.
+        (403, "insufficient_permissions"),
         (500, "cannot_connect"),
         (404, "cannot_connect"),
     ],
@@ -181,3 +182,28 @@ async def test_a_rejected_key_while_polling_opens_a_reauth_flow(
     assert len(flows) == 1
     assert flows[0]["context"]["source"] == "reauth"
     assert flows[0]["context"]["entry_id"] == config_entry.entry_id
+
+
+def test_every_error_the_flow_can_return_has_a_translation():
+    """An untranslated key renders as a raw slug in the dialog."""
+    import json
+    import re
+    from pathlib import Path
+
+    root = Path(__file__).parent.parent / "custom_components" / "dockmon"
+    used = set(re.findall(r'"base":\s*"([a-z_]+)"', (root / "config_flow.py").read_text()))
+    assert used, "no error keys found — did the flow stop using {'base': ...}?"
+
+    for name in ("strings.json", "translations/en.json"):
+        declared = set(json.loads((root / name).read_text())["config"]["error"])
+        assert used <= declared, f"{name} is missing {sorted(used - declared)}"
+
+
+def test_strings_and_english_translations_stay_in_sync():
+    import json
+    from pathlib import Path
+
+    root = Path(__file__).parent.parent / "custom_components" / "dockmon"
+    assert json.loads((root / "strings.json").read_text()) == json.loads(
+        (root / "translations" / "en.json").read_text()
+    )
