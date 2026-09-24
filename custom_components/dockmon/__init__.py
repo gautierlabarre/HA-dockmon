@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import time
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
@@ -16,9 +17,14 @@ from .const import (
     DOMAIN,
     PLATFORMS,
 )
-from .coordinator import DockmonCoordinator, container_key
+from .coordinator import DockmonCoordinator, container_key, legacy_container_keys
 
 _LOGGER = logging.getLogger(__name__)
+
+# How long a host or container must stay absent from the API before its device is
+# deleted. Covers container recreation (`docker compose up -d`, Watchtower, a slow
+# image pull) and DockMon restarts, during which containers legitimately vanish.
+STALE_GRACE = 15 * 60  # seconds
 
 
 def _register_host_devices(hass: HomeAssistant, entry: ConfigEntry, coordinator: DockmonCoordinator) -> None:
@@ -39,20 +45,21 @@ def _register_host_devices(hass: HomeAssistant, entry: ConfigEntry, coordinator:
 def _migrate_id_keyed_devices(
     hass: HomeAssistant, entry: ConfigEntry, coordinator: DockmonCoordinator
 ) -> None:
-    """Re-key devices that were identified by their (unstable) Docker container ID.
+    """Re-key devices that were identified by an unstable property of the container.
 
-    Up to 1.0.0 a device was identified by `{host_id}_{container_id}`. Since the
-    Docker ID changes on every container recreation, each recreation orphaned the
-    previous device. Move the still-existing containers onto their name-based key
-    so their history survives; the orphans left behind are dropped by
-    `_prune_stale_devices`.
+    1.0.x keyed on the Docker ID, which changes on every recreation; 1.1.x keyed on
+    the name, which DockMon rewrites when it disambiguates a collision. Both churned
+    identities and orphaned the previous device. Move still-existing containers onto
+    their compose-label key *in place* — that preserves entity IDs, history and
+    customisations. Orphans left behind are dropped by `_prune_stale_devices`.
     """
     dev_reg = dr.async_get(hass)
     ent_reg = er.async_get(hass)
 
     old_to_new = {
-        f"{c['host_id']}_{c['id']}": container_key(c)
+        legacy: container_key(c)
         for c in coordinator.data["containers"]
+        for legacy in legacy_container_keys(c)
     }
 
     devices = dr.async_entries_for_config_entry(dev_reg, entry.entry_id)
@@ -88,31 +95,66 @@ def _migrate_id_keyed_devices(
 
 
 def _prune_stale_devices(
-    hass: HomeAssistant, entry: ConfigEntry, coordinator: DockmonCoordinator
+    hass: HomeAssistant,
+    entry: ConfigEntry,
+    coordinator: DockmonCoordinator,
+    missing_since: dict[str, float],
 ) -> None:
-    """Remove devices for hosts/containers DockMon no longer reports."""
+    """Remove devices for hosts/containers DockMon has stopped reporting.
+
+    Removing a device deletes its entities from the registry, which frees their
+    entity IDs and breaks every dashboard card and automation pointing at them —
+    so absence is only ever acted on once it has held for STALE_GRACE.
+    """
     if not coordinator.last_update_success:
         return
 
     data = coordinator.data
-    host_ids = set(data["hosts"])
+    hosts, containers = data["hosts"], data["containers"]
+    # An empty payload is indistinguishable from a DockMon that is still starting
+    # up: it answers 200 with [] before its Docker hosts have connected. Treating
+    # that as "everything was deleted" would wipe the whole integration in one poll.
+    if not hosts or not containers:
+        missing_since.clear()
+        return
+
+    host_ids = set(hosts)
     container_keys = set(data["containers_by_key"])
+    live = host_ids | container_keys
     # A host reporting zero containers is far more likely unreachable than truly
     # empty, so leave its devices alone rather than wiping them on a bad poll.
-    hosts_with_containers = {c["host_id"] for c in data["containers"]}
+    hosts_with_containers = {c["host_id"] for c in containers}
 
+    now = time.monotonic()
     dev_reg = dr.async_get(hass)
     for device in dr.async_entries_for_config_entry(dev_reg, entry.entry_id):
         ids = {i for d, i in device.identifiers if d == DOMAIN}
-        if ids & host_ids or ids & container_keys:
-            continue
         owner = next(
             (h for h in host_ids if any(i.startswith(f"{h}_") for i in ids)), None
         )
-        if owner is not None and owner not in hosts_with_containers:
-            continue  # host is present but silent – don't assume it's empty
-        _LOGGER.info("Removing stale DockMon device %s (%s)", device.name, ids)
+        if (ids & live) or (owner is not None and owner not in hosts_with_containers):
+            missing_since.pop(device.id, None)
+            continue
+
+        first_seen_missing = missing_since.setdefault(device.id, now)
+        missing_for = now - first_seen_missing
+        if missing_for < STALE_GRACE:
+            _LOGGER.debug(
+                "DockMon device %s missing for %.0fs, keeping it until %.0fs",
+                device.name,
+                missing_for,
+                STALE_GRACE,
+            )
+            continue
+
+        _LOGGER.info(
+            "Removing DockMon device %s (%s), absent for %.0f minutes",
+            device.name,
+            ids,
+            missing_for / 60,
+        )
         dev_reg.async_remove_device(device.id)
+        missing_since.pop(device.id, None)
 
 
 async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -147,14 +189,18 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     )
     await coordinator.async_config_entry_first_refresh()
 
+    # Keyed by device registry ID: when each device was first seen missing.
+    missing_since: dict[str, float] = {}
+
     _migrate_id_keyed_devices(hass, entry, coordinator)
     _register_host_devices(hass, entry, coordinator)
-    _prune_stale_devices(hass, entry, coordinator)
+    # Starts the grace clock for anything already absent; deletes nothing yet.
+    _prune_stale_devices(hass, entry, coordinator, missing_since)
 
     @callback
     def _sync_registry() -> None:
         _register_host_devices(hass, entry, coordinator)
-        _prune_stale_devices(hass, entry, coordinator)
+        _prune_stale_devices(hass, entry, coordinator, missing_since)
 
     entry.async_on_unload(coordinator.async_add_listener(_sync_registry))
 

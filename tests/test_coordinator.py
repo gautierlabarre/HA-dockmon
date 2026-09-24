@@ -149,3 +149,48 @@ async def test_unknown_action_is_rejected(hass):
     coordinator = DockmonCoordinator(hass, url=URL, api_key="s3cret")
     with pytest.raises(ValueError):
         await coordinator.async_container_action("h1", "c1", "self-destruct")
+
+
+# --- Resilience to DockMon renaming a container -----------------------------
+# DockMon disambiguates colliding names by baking a Docker short ID into the
+# `name` field (`a133bfdc6f16_snapotter`). That prefix is not the running
+# container's ID and it comes and goes, so neither the key nor the display name
+# may depend on it.
+
+COMPOSE = {
+    "com.docker.compose.project": "infra",
+    "com.docker.compose.service": "snapotter",
+}
+
+
+def test_short_id_prefix_is_stripped_from_the_display_name():
+    assert (
+        container_name({"id": "243541a5f151", "name": "a133bfdc6f16_snapotter"})
+        == "snapotter"
+    )
+
+
+def test_a_name_that_merely_looks_prefixed_is_kept():
+    # Not 12 hex characters, so not DockMon's prefix.
+    assert container_name({"id": "c1", "name": "deadbeef_worker"}) == "deadbeef_worker"
+
+
+def test_key_uses_compose_labels_and_ignores_id_and_name():
+    before = {"id": "a133bfdc6f16", "host_id": "h1", "name": "snapotter", "labels": COMPOSE}
+    after = {
+        "id": "243541a5f151",  # recreated: new Docker ID
+        "host_id": "h1",
+        "name": "a133bfdc6f16_snapotter",  # and renamed by DockMon
+        "labels": COMPOSE,
+    }
+    assert container_key(before) == container_key(after) == "h1_infra_snapotter"
+
+
+def test_key_falls_back_to_the_name_without_compose_labels():
+    assert container_key({"id": "c1", "host_id": "h1", "name": "plain"}) == "h1_plain"
+
+
+def test_same_service_on_two_hosts_stays_distinct():
+    a = {"id": "c1", "host_id": "h1", "name": "caddy", "labels": COMPOSE}
+    b = {"id": "c2", "host_id": "h2", "name": "caddy", "labels": COMPOSE}
+    assert container_key(a) != container_key(b)

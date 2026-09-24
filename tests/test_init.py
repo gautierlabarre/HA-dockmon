@@ -2,6 +2,7 @@
 from homeassistant.config_entries import ConfigEntryState
 from homeassistant.helpers import device_registry as dr, entity_registry as er
 
+from custom_components import dockmon
 from custom_components.dockmon.const import DOMAIN
 
 from .conftest import CONTAINERS, HOSTS, URL
@@ -81,17 +82,51 @@ async def test_id_keyed_devices_are_migrated_to_name_keys(hass, mock_api, config
     assert entity.unique_id == "dockmon_h1_nextcloud_switch"
 
 
-async def test_devices_of_removed_containers_are_pruned(hass, mock_api, config_entry):
-    dev_reg = dr.async_get(hass)
-    dev_reg.async_get_or_create(
+def _stale_device(hass, config_entry, identifier="h1_deleted-container"):
+    return dr.async_get(hass).async_get_or_create(
         config_entry_id=config_entry.entry_id,
-        identifiers={(DOMAIN, "h1_deleted-container")},
-        name="mini-server deleted-container",
+        identifiers={(DOMAIN, identifier)},
+        name=f"mini-server {identifier}",
     )
+
+
+async def test_devices_of_removed_containers_are_pruned(
+    hass, mock_api, config_entry, monkeypatch
+):
+    monkeypatch.setattr(dockmon, "STALE_GRACE", 0)
+    _stale_device(hass, config_entry)
 
     await _setup(hass, config_entry)
 
+    dev_reg = dr.async_get(hass)
     assert dev_reg.async_get_device_by_identifier((DOMAIN, "h1_deleted-container"), config_entry.entry_id) is None
+
+
+async def test_a_briefly_absent_container_is_not_pruned(hass, mock_api, config_entry):
+    """Recreating a container makes it vanish for a while – that must not delete it.
+
+    Removing the device deletes its entities from the registry, frees their entity
+    IDs and breaks every dashboard and automation pointing at them.
+    """
+    _stale_device(hass, config_entry)
+
+    await _setup(hass, config_entry)
+
+    dev_reg = dr.async_get(hass)
+    assert dev_reg.async_get_device_by_identifier((DOMAIN, "h1_deleted-container"), config_entry.entry_id) is not None
+
+
+async def test_an_empty_payload_never_prunes(hass, aioclient_mock, config_entry, monkeypatch):
+    """DockMon answers 200 with [] while starting up; that is not a deletion."""
+    monkeypatch.setattr(dockmon, "STALE_GRACE", 0)
+    aioclient_mock.get(f"{URL}/api/hosts", json=[])
+    aioclient_mock.get(f"{URL}/api/containers", json=[])
+    _stale_device(hass, config_entry, "h1_nextcloud")
+
+    await _setup(hass, config_entry)
+
+    dev_reg = dr.async_get(hass)
+    assert dev_reg.async_get_device_by_identifier((DOMAIN, "h1_nextcloud"), config_entry.entry_id) is not None
 
 
 async def test_a_silent_host_does_not_lose_its_devices(hass, aioclient_mock, config_entry):
@@ -145,3 +180,94 @@ async def test_new_entries_verify_tls(hass, mock_api, config_entry):
     assert config_entry.version == 2
 
     assert hass.data[DOMAIN][config_entry.entry_id].verify_ssl is True
+
+
+# --- The 1.1.x regression: DockMon renaming a container ----------------------
+
+LABELLED = [
+    {
+        "id": "a133bfdc6f16",
+        "host_id": "h1",
+        "name": "snapotter",
+        "state": "running",
+        "status": "Up 2 days",
+        "image": "snapotter/snapotter:latest",
+        "cpu_percent": 1.0,
+        "memory_percent": 2.0,
+        "memory_usage": 1024,
+        "labels": {
+            "com.docker.compose.project": "infra",
+            "com.docker.compose.service": "snapotter",
+        },
+    }
+]
+
+
+def _serve(aioclient_mock, containers):
+    aioclient_mock.clear_requests()
+    aioclient_mock.get(f"{URL}/api/hosts", json=HOSTS)
+    aioclient_mock.get(f"{URL}/api/containers", json=containers)
+
+
+def _dockmon_entity_ids(hass):
+    return {e.entity_id for e in er.async_get(hass).entities.values() if e.platform == DOMAIN}
+
+
+async def test_a_container_renamed_by_dockmon_keeps_its_entity_ids(
+    hass, aioclient_mock, config_entry
+):
+    """DockMon rewrites `name` to `<short_id>_<name>` when it disambiguates.
+
+    Keying on the name made that look like a different container: HA built a second
+    device and the original entity IDs disappeared from every dashboard.
+    """
+    _serve(aioclient_mock, LABELLED)
+    await _setup(hass, config_entry)
+    before = _dockmon_entity_ids(hass)
+    assert "switch.mini_server_snapotter" in before
+
+    renamed = [{**LABELLED[0], "id": "243541a5f151", "name": "a133bfdc6f16_snapotter"}]
+    _serve(aioclient_mock, renamed)
+    await hass.config_entries.async_reload(config_entry.entry_id)
+    await hass.async_block_till_done()
+
+    assert _dockmon_entity_ids(hass) == before
+    dev_reg = dr.async_get(hass)
+    device = dev_reg.async_get_device_by_identifier(
+        (DOMAIN, "h1_infra_snapotter"), config_entry.entry_id
+    )
+    assert device is not None
+    assert device.name == "mini-server snapotter"  # prefix never reaches the name
+
+
+async def test_name_keyed_devices_are_migrated_to_compose_keys(
+    hass, aioclient_mock, config_entry
+):
+    """A 1.1.x device is re-keyed in place, keeping its entity ID and history."""
+    _serve(aioclient_mock, LABELLED)
+    dev_reg = dr.async_get(hass)
+    ent_reg = er.async_get(hass)
+
+    legacy = dev_reg.async_get_or_create(
+        config_entry_id=config_entry.entry_id,
+        identifiers={(DOMAIN, "h1_snapotter")},
+        name="mini-server snapotter",
+    )
+    legacy_switch = ent_reg.async_get_or_create(
+        "switch",
+        DOMAIN,
+        "dockmon_h1_snapotter_switch",
+        device_id=legacy.id,
+        config_entry=config_entry,
+    )
+
+    await _setup(hass, config_entry)
+
+    migrated = dev_reg.async_get_device_by_identifier(
+        (DOMAIN, "h1_infra_snapotter"), config_entry.entry_id
+    )
+    assert migrated is not None
+    assert migrated.id == legacy.id
+    entity = ent_reg.async_get(legacy_switch.entity_id)
+    assert entity is not None
+    assert entity.unique_id == "dockmon_h1_infra_snapotter_switch"

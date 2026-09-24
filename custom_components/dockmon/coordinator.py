@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from datetime import timedelta
 
 import aiohttp
@@ -27,20 +28,54 @@ AUTH_STATUSES = (401, 403)
 _LOGGER = logging.getLogger(__name__)
 
 
+# DockMon disambiguates colliding container names by prefixing the Docker short
+# ID, e.g. `a133bfdc6f16_snapotter`. The prefix it bakes in is whatever short ID
+# was current when the collision was resolved, so it neither matches the running
+# container nor stays put — it must never reach a name or a key.
+_SHORT_ID_PREFIX_RE = re.compile(r"^[0-9a-f]{12}_")
+
+COMPOSE_PROJECT_LABEL = "com.docker.compose.project"
+COMPOSE_SERVICE_LABEL = "com.docker.compose.service"
+
+
 def container_name(container: dict) -> str:
-    """Return the container name, falling back to its Docker ID."""
-    return (container.get("name") or "").strip().lstrip("/") or container["id"]
+    """Display name of a container, stripped of DockMon's short-ID prefix."""
+    raw = (container.get("name") or "").strip().lstrip("/")
+    if not raw:
+        return container["id"]
+    return _SHORT_ID_PREFIX_RE.sub("", raw) or raw
 
 
 def container_key(container: dict) -> str:
-    """Stable identity for a container.
+    """Stable identity for a container, independent of ID *and* of name.
 
-    Keyed on the container *name* rather than its Docker ID: the ID changes every
-    time the container is recreated (image update, `docker compose up -d`, ...),
-    which would otherwise spawn a brand new HA device on each recreation. Names
-    are unique per host in Docker, so `host_id + name` is both stable and unique.
+    Compose labels come first: `project` + `service` are declared in the compose
+    file, so they survive both recreation (which changes the Docker ID) and any
+    renaming DockMon does on its side. Only containers started outside compose
+    fall back to the name, which is merely the best remaining option.
     """
+    labels = container.get("labels") or {}
+    project = labels.get(COMPOSE_PROJECT_LABEL)
+    service = labels.get(COMPOSE_SERVICE_LABEL)
+    if project and service:
+        return f"{container['host_id']}_{project}_{service}"
     return f"{container['host_id']}_{container_name(container)}"
+
+
+def legacy_container_keys(container: dict) -> set[str]:
+    """Identifiers this container carried under earlier versions of the integration.
+
+    Used to re-key existing devices in place, which keeps their entity IDs,
+    history and customisations — recreating them would not.
+    """
+    host_id = container["host_id"]
+    raw_name = (container.get("name") or "").strip().lstrip("/")
+    candidates = {
+        f"{host_id}_{container['id']}",  # 1.0.x: keyed on the Docker ID
+        f"{host_id}_{raw_name}",  # 1.1.x: keyed on the raw (possibly prefixed) name
+        f"{host_id}_{container_name(container)}",  # 1.1.x with an unprefixed name
+    }
+    return {c for c in candidates if c and c != container_key(container)}
 
 
 class DockmonCoordinator(DataUpdateCoordinator):
