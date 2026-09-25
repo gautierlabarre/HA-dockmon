@@ -28,6 +28,21 @@ class DockmonSensorEntityDescription(SensorEntityDescription):
     value_fn: Callable[[dict], float | str | None] = lambda c: None
 
 
+def _percent(value: float | None) -> float | None:
+    """Keep a missing measurement missing.
+
+    DockMon only streams container stats while someone is watching, unless stats
+    persistence is enabled, so null is the normal answer for a local or mTLS host.
+    Reporting 0.0 would claim the container is idle instead of admitting we have
+    no measurement — and that reads like a broken integration.
+    """
+    return None if value is None else round(value, 1)
+
+
+def _megabytes(value: float | None) -> float | None:
+    return None if value is None else round(value / 1024 / 1024, 1)
+
+
 CONTAINER_SENSORS: tuple[DockmonSensorEntityDescription, ...] = (
     DockmonSensorEntityDescription(
         key="cpu_percent",
@@ -35,7 +50,7 @@ CONTAINER_SENSORS: tuple[DockmonSensorEntityDescription, ...] = (
         native_unit_of_measurement=PERCENTAGE,
         state_class=SensorStateClass.MEASUREMENT,
         icon="mdi:cpu-64-bit",
-        value_fn=lambda c: round(c.get("cpu_percent") or 0, 1),
+        value_fn=lambda c: _percent(c.get("cpu_percent")),
     ),
     DockmonSensorEntityDescription(
         key="memory_percent",
@@ -43,7 +58,7 @@ CONTAINER_SENSORS: tuple[DockmonSensorEntityDescription, ...] = (
         native_unit_of_measurement=PERCENTAGE,
         state_class=SensorStateClass.MEASUREMENT,
         icon="mdi:memory",
-        value_fn=lambda c: round(c.get("memory_percent") or 0, 1),
+        value_fn=lambda c: _percent(c.get("memory_percent")),
     ),
     DockmonSensorEntityDescription(
         key="memory_usage",
@@ -52,7 +67,7 @@ CONTAINER_SENSORS: tuple[DockmonSensorEntityDescription, ...] = (
         device_class=SensorDeviceClass.DATA_SIZE,
         state_class=SensorStateClass.MEASUREMENT,
         icon="mdi:memory",
-        value_fn=lambda c: round((c.get("memory_usage") or 0) / 1024 / 1024, 1),
+        value_fn=lambda c: _megabytes(c.get("memory_usage")),
     ),
     DockmonSensorEntityDescription(
         key="state",
