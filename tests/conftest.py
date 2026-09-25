@@ -53,11 +53,17 @@ def auto_enable_custom_integrations(enable_custom_integrations):
     yield
 
 
+ALL_CAPABILITIES = {
+    "capabilities": ["hosts.view", "containers.view", "containers.operate"]
+}
+
+
 @pytest.fixture
 def mock_api(aioclient_mock):
     """Mock a healthy DockMon API."""
     aioclient_mock.get(f"{URL}/api/hosts", json=HOSTS)
     aioclient_mock.get(f"{URL}/api/containers", json=CONTAINERS)
+    aioclient_mock.get(f"{URL}/api/v2/auth/me", json=ALL_CAPABILITIES)
     return aioclient_mock
 
 

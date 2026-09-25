@@ -58,7 +58,15 @@ async def async_validate(
         hass, url=url, api_key=api_key, verify_ssl=verify_ssl
     )
     try:
-        return await coordinator.async_validate_connection(), {}
+        hosts = await coordinator.async_validate_connection()
+        # Catch an under-scoped key here rather than let it fail on some later
+        # poll or switch press, where a 403 says nothing about what is missing.
+        if missing := await coordinator.async_missing_capabilities():
+            _LOGGER.warning(
+                "DockMon API key is missing the capabilities: %s", ", ".join(missing)
+            )
+            return [], {"base": "insufficient_permissions"}
+        return hosts, {}
     except aiohttp.ClientResponseError as err:
         _LOGGER.debug("DockMon /api/hosts returned HTTP %s", err.status)
         if err.status == UNAUTHORIZED:

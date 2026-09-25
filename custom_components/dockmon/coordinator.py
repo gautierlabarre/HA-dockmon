@@ -14,6 +14,7 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, Upda
 
 from .const import (
     ACTION_TIMEOUT,
+    API_AUTH_ME,
     API_CONTAINERS,
     API_CONTAINER_RESTART,
     API_CONTAINER_START,
@@ -30,6 +31,7 @@ from .const import (
 # asking the user for a new key — a 403 answer would be the same key again.
 UNAUTHORIZED = 401
 FORBIDDEN = 403
+NOT_FOUND = 404
 
 # What the integration needs to poll and to drive the switches.
 REQUIRED_CAPABILITIES = ("hosts.view", "containers.view", "containers.operate")
@@ -208,6 +210,31 @@ class DockmonCoordinator(DataUpdateCoordinator):
             raise HomeAssistantError(
                 f"DockMon action '{action}' could not reach {self.url}: {err}"
             ) from err
+
+    async def async_missing_capabilities(self) -> tuple[str, ...]:
+        """Required capabilities this API key does not have.
+
+        Returns nothing when DockMon cannot tell us: the endpoint postdates some
+        deployments, and rejecting a key we were simply unable to check would
+        lock people out of a setup that works.
+        """
+        session = self._session()
+        async with session.get(
+            f"{self.url}{API_AUTH_ME}",
+            headers=self._headers,
+            timeout=aiohttp.ClientTimeout(total=POLL_TIMEOUT),
+        ) as resp:
+            if resp.status == NOT_FOUND:
+                _LOGGER.debug("No %s on this DockMon; skipping the check", API_AUTH_ME)
+                return ()
+            resp.raise_for_status()
+            payload = await resp.json()
+
+        granted = payload.get("capabilities")
+        if not isinstance(granted, list):
+            _LOGGER.debug("DockMon listed no capabilities; skipping the check")
+            return ()
+        return tuple(c for c in REQUIRED_CAPABILITIES if c not in granted)
 
     async def async_validate_connection(self) -> list[dict]:
         """Validate credentials and return hosts list."""

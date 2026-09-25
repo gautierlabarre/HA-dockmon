@@ -11,7 +11,7 @@ from custom_components.dockmon.const import (
     DOMAIN,
 )
 
-from .conftest import HOSTS, URL
+from .conftest import ALL_CAPABILITIES, HOSTS, URL
 
 USER_INPUT = {CONF_URL: f"{URL}/", CONF_API_KEY: "s3cret"}
 
@@ -117,6 +117,7 @@ async def test_the_form_can_be_retried_after_an_error(hass, aioclient_mock):
     aioclient_mock.clear_requests()
     aioclient_mock.get(f"{URL}/api/hosts", json=HOSTS)
     aioclient_mock.get(f"{URL}/api/containers", json=[])
+    aioclient_mock.get(f"{URL}/api/v2/auth/me", json=ALL_CAPABILITIES)
 
     result = await hass.config_entries.flow.async_configure(
         result["flow_id"], USER_INPUT
@@ -207,3 +208,49 @@ def test_strings_and_english_translations_stay_in_sync():
     assert json.loads((root / "strings.json").read_text()) == json.loads(
         (root / "translations" / "en.json").read_text()
     )
+
+
+# --- Capability check at key entry ------------------------------------------
+# A key that cannot do the job fails on some later poll or switch press, where a
+# 403 says nothing about what is missing. Catch it while the user is right here.
+
+
+async def _submit(hass, aioclient_mock, capabilities_payload):
+    aioclient_mock.get(f"{URL}/api/hosts", json=HOSTS)
+    aioclient_mock.get(f"{URL}/api/containers", json=HOSTS)
+    aioclient_mock.get(f"{URL}/api/v2/auth/me", **capabilities_payload)
+
+    result = await _start_flow(hass)
+    return await hass.config_entries.flow.async_configure(
+        result["flow_id"], USER_INPUT
+    )
+
+
+async def test_a_key_missing_a_capability_is_refused(hass, aioclient_mock):
+    result = await _submit(
+        hass,
+        aioclient_mock,
+        {"json": {"capabilities": ["hosts.view", "containers.view"]}},  # no operate
+    )
+
+    assert result["type"] is FlowResultType.FORM
+    assert result["errors"] == {"base": "insufficient_permissions"}
+
+
+async def test_a_fully_scoped_key_is_accepted(hass, aioclient_mock):
+    result = await _submit(hass, aioclient_mock, {"json": ALL_CAPABILITIES})
+
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+
+
+async def test_a_dockmon_without_the_endpoint_is_not_blocked(hass, aioclient_mock):
+    """The endpoint postdates some deployments; an unverifiable key still works."""
+    result = await _submit(hass, aioclient_mock, {"status": 404})
+
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+
+
+async def test_a_payload_without_capabilities_is_not_blocked(hass, aioclient_mock):
+    result = await _submit(hass, aioclient_mock, {"json": {"auth_type": "api_key"}})
+
+    assert result["type"] is FlowResultType.CREATE_ENTRY

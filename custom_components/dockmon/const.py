@@ -21,6 +21,7 @@ DEFAULT_SCAN_INTERVAL = 2 * POLL_TIMEOUT  # seconds
 # entries get TLS verification on by default.
 DEFAULT_VERIFY_SSL = True
 
+API_AUTH_ME = "/api/v2/auth/me"
 API_HOSTS = "/api/hosts"
 API_CONTAINERS = "/api/containers"
 API_CONTAINER_START = "/api/hosts/{host_id}/containers/{container_id}/start"
